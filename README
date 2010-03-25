@@ -1,0 +1,98 @@
+The internet archive S3 connector.
+
+see petabox/www/help/abouts3.txt for some instructions
+see petabox/www/sf/account/s3.php for admin tools
+
+Uses apache 2.2.11(newer is probably OK) + mod_wsgi2.3(newer is OK)
+
+The below change adds the apache request unparsed_uri string to the
+wsgi enviornment. This is necessary for the request signing. 
+
+required mod_wsgi patch applied to src/mod_wsgi-2.3:
+-----------------------------------------------------------------------------------
+--- orig-mod_wsgi.c     2009-02-05 23:47:33.753374169 +0000
++++ mod_wsgi.c  2009-04-29 04:21:44.964589556 +0000
+@@ -2360,16 +2360,21 @@
+          * want to do this for 2xx and 3xx status values.
+          */
+
+-        if (self->status >= 200 && self->status < 400) {
+-            PyObject *args = NULL;
+-            PyObject *result = NULL;
+-            args = Py_BuildValue("(i)", 0);
+-            result = Input_read(self->input, args);
+-            if (PyErr_Occurred())
+-                PyErr_Clear();
+-            Py_DECREF(args);
+-            Py_XDECREF(result);
+-        }
++        /*
++         *  This block is a workaround for apache before 2.2.8
++         *
++         *
++         * if (self->status >= 200 && self->status < 400) {
++         *   PyObject *args = NULL;
++         *   PyObject *result = NULL;
++         *   args = Py_BuildValue("(i)", 0);
++         *   result = Input_read(self->input, args);
++         *   if (PyErr_Occurred())
++         *       PyErr_Clear();
++         *   Py_DECREF(args);
++         *   Py_XDECREF(result);
++         * }
++         */
+
+         /* Now setup response headers in request object. */
+
+@@ -2443,11 +2448,11 @@
+             }
+             else if (!strcasecmp(name, "Content-Length")) {
+                 char *v = value;
+-                long l = 0;
++                apr_off_t l = 0;
++                apr_status_t str_status;
+
+-                errno = 0;
+-                l = strtol(v, &v, 10);
+-                if (*v || errno == ERANGE || l < 0) {
++                str_status = apr_strtoff(&l, v, &v, 10);
++                if (*v || str_status == ERANGE || l < 0) {
+                     PyErr_SetString(PyExc_ValueError,
+                                     "invalid content length");
+                     return 0;
+@@ -2753,6 +2758,11 @@
+         }
+     }
+
++    /* Special passthrough for the S3 request of the unparsed uri */
++    object = PyString_FromString(r->unparsed_uri);
++    PyDict_SetItemString(vars, "unparsed_uri", object);
++    Py_DECREF(object);
++
+     /* Now setup all the WSGI specific environment values. */
+
+     object = Py_BuildValue("(ii)", 1, 0);
+
+-----------------------------------------------------------------------------------
+
+
+
+Uses Authentication from a mysql db
+ sudo apt-get install python-mysqldb
+
+
+schema in mysql:
+
+create table IF NOT EXISTS archive.s3users (
+    s3accesskey VARCHAR(255) UNIQUE NOT NULL,
+    s3secretkey VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    PRIMARY KEY (s3accesskey),
+    INDEX(username) );
+
+create table IF NOT EXISTS archive.s3buckets (
+    s3accesskey VARCHAR(255) NOT NULL,
+    s3bucket VARCHAR(255) NOT NULL,
+    INDEX (s3accesskey),
+    PRIMARY KEY (s3bucket) );
+
